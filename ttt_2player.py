@@ -1,3 +1,4 @@
+
 # tic_tac_toe_firebase.py
 # A two-player, gesture-controlled Tic-Tac-Toe game using a central Firebase server.
 # Both players run this exact same script and connect using a Game ID.
@@ -218,4 +219,3 @@ if __name__ == "__main__":
     final_winner = local_game_state.get('winner')
     if final_winner and final_winner != 'draw' and final_winner != MY_SYMBOL:
         crash_computer()
-
