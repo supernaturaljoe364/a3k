@@ -1,0 +1,29 @@
+<!-- inheriting template from the base.html file-->
+{%extends 'base.html' %}
+{% block head %}
+<title>Task Smaash 2.0</title>
+{% endblock %}
+
+{% block body %}
+<!-- the Hello will be taken and pushed into the <body> segment of the base.html template-->
+<div class = "content">
+        <h1>Tasks</h1>
+        <table>
+            <tr>
+                <th>Task</th>
+                <th>Added</th>
+                <th>Actions</th>
+            </tr>
+
+            <tr>
+                <td>Content</td>
+                <td>Data</td>
+                <td>More</td>
+            </tr>
+        </table>
+        <form action="">
+            <input type="text" name="content" id="content">
+            <input type="submit" value="Add Task" id="btn_add">
+        </form>
+    </div>
+{% endblock %}
