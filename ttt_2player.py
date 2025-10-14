@@ -1,6 +1,7 @@
 # tic_tac_toe_2p.py
 # A true two-player, peer-to-peer Tic-Tac-Toe game using sockets and OpenCV.
 # Both players run this same script.
+# CONTROLS: Player X = Open Palm | Player O = Fist
 
 import cv2
 import mediapipe as mp
@@ -11,13 +12,13 @@ import pickle
 import struct
 import threading
 from collections import deque
+import time
 
 # --- SETTINGS ---
 WINDOW_SIZE = 600
 CELL_SIZE = WINDOW_SIZE // 3
 LINE_COLOR = (255, 255, 255)
 LINE_THICKNESS = 4
-GESTURE_THRESHOLD = 0.06
 PORT = 9999
 
 # --- INITIALIZATION ---
@@ -65,22 +66,27 @@ def send_move(move):
 
 # --- GESTURE HELPERS ---
 def fingers_up(hand):
+    """Returns a list of 5 booleans, one for each finger, indicating if it's up."""
     tips = [4, 8, 12, 16, 20]; pips = [3, 6, 10, 14, 18]; res = []
-    for i, j in zip(tips, pips):
-        if i == 4: res.append(hand.landmark[i].x < hand.landmark[j].x if hand.landmark[i].x < hand.landmark[0].x else hand.landmark[i].x > hand.landmark[j].x)
-        else: res.append(hand.landmark[i].y < hand.landmark[j].y)
+    # This logic is for a right hand held vertically.
+    # Thumb (checks horizontal position)
+    res.append(hand.landmark[tips[0]].x < hand.landmark[pips[0]].x)
+    # Other four fingers (checks vertical position)
+    for i in range(1,5):
+        res.append(hand.landmark[tips[i]].y < hand.landmark[pips[i]].y)
     return res
 
-def is_two_fingers(hand): # For Player X
-    fingers = fingers_up(hand)
-    return fingers[1] and fingers[2] and not any([fingers[0], fingers[3], fingers[4]])
+def is_open_palm(hand): # For Player X
+    """Checks if all five fingers are extended."""
+    return all(fingers_up(hand))
 
-def is_ok_sign(hand): # For Player O
-    dist = math.hypot(hand.landmark[4].x - hand.landmark[8].x, hand.landmark[4].y - hand.landmark[8].y)
-    return dist < GESTURE_THRESHOLD
+def is_fist(hand): # For Player O
+    """Checks if no fingers are extended."""
+    return not any(fingers_up(hand))
 
 def get_cell(x, y):
-    return int(y / CELL_SIZE), int(x / WINDOW_SIZE) # Corrected to use WINDOW_SIZE for y calc
+    """Converts pixel coordinates to board cell coordinates (row, col)."""
+    return int(y / CELL_SIZE), int(x / CELL_SIZE)
 
 # --- DRAWING ---
 def draw_board(frame):
@@ -153,12 +159,15 @@ if __name__ == "__main__":
                 mp_draw.draw_landmarks(frame, hand, mp_hands.HAND_CONNECTIONS)
 
                 gesture_made = False
-                if my_player_id == 1: gesture_made = is_two_fingers(hand)
-                elif my_player_id == 2: gesture_made = is_ok_sign(hand)
+                if my_player_id == 1: # Player X uses Open Palm
+                    gesture_made = is_open_palm(hand)
+                elif my_player_id == 2: # Player O uses Fist
+                    gesture_made = is_fist(hand)
 
                 if gesture_made and (time.time() - last_gesture_time > 2):
-                    tip = hand.landmark[12] # Use middle finger tip for pointing
-                    px, py = int(tip.x * WINDOW_SIZE), int(tip.y * WINDOW_SIZE)
+                    # Use the wrist's position for aiming
+                    pointer = hand.landmark[0] 
+                    px, py = int(pointer.x * WINDOW_SIZE), int(pointer.y * WINDOW_SIZE)
                     row, col = get_cell(px, py)
                     
                     if 0 <= row < 3 and 0 <= col < 3 and board[row, col] == 0:
@@ -180,3 +189,4 @@ if __name__ == "__main__":
     cap.release()
     cv2.destroyAllWindows()
     if conn: conn.close()
+
