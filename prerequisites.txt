@@ -1,0 +1,18 @@
+This file lists all the Python packages required to run the Tic-Tac-Crash game.
+To install all these packages, run the following command in your terminal:
+pip install -r requirements.txt
+opencv-python
+mediapipe
+firebase-admin
+
+A specific version of protobuf is needed to ensure compatibility
+between mediapipe and firebase-admin.
+protobuf==4.25.3
+
+
+### How to Use This File
+
+1.  **Add it to your project:** Save this file in your `FlaskApp` folder, right next to your `tic_tac_toe_firebase.py` script.
+2.  **Tell your friend (and your README):** Anyone who clones your project can now set up their environment with a single command:
+    ```bash
+    pip install -r requirements.txt
