@@ -1,241 +1,221 @@
-# tic_tac_toe_2p.py
-# A true two-player, peer-to-peer Tic-Tac-Toe game using sockets and OpenCV.
-# Both players run this same script.
+# tic_tac_toe_firebase.py
+# A two-player, gesture-controlled Tic-Tac-Toe game using a central Firebase server.
+# Both players run this exact same script and connect using a Game ID.
 # CONTROLS: Player X = Open Palm | Player O = Fist
 
+
+
+#note: required, firebase-admin
+# make sure protobuf in version 4.25.3 to run both mediapipe and firebase
+# --- Step 1: Import Libraries ---
 import cv2
 import mediapipe as mp
-import numpy as np
-import math
-import socket
-import pickle
-import struct
-import threading
-from collections import deque
+import firebase_admin
+from firebase_admin import credentials, firestore
 import time
+import math
 import webbrowser
+import threading
+import random
 
-# --- SETTINGS ---
-WINDOW_SIZE = 600
-CELL_SIZE = WINDOW_SIZE // 3
-LINE_COLOR = (255, 255, 255)
-LINE_THICKNESS = 4
-PORT = 9999
+# --- Step 2: Configuration ---
+PINCH_THRESHOLD = 0.08 
+CELL_SIZE = 150
+BOARD_COLOR = (255, 255, 255)
+SYMBOL_COLOR_X = (0, 0, 255) # Red for X
+SYMBOL_COLOR_O = (255, 0, 0) # Blue for O
+HIGHLIGHT_COLOR = (0, 255, 0)
 
-# --- INITIALIZATION ---
+# --- Step 3: Firebase Initialization ---
+try:
+    cred = credentials.Certificate("credentials.json")
+    firebase_admin.initialize_app(cred)
+    db = firestore.client()
+    print("Successfully connected to Firebase.")
+except Exception as e:
+    print(f"Error connecting to Firebase: {e}")
+    print("Please ensure 'credentials.json' is in the correct folder and you've followed the setup instructions.")
+    exit()
+
+# --- Step 4: Player & Game Setup ---
+MY_SYMBOL = ''
+GAME_ID = ''
+game_ref = None
+
+# --- Step 5: Initialization ---
+cap = cv2.VideoCapture(0)
+cap.set(3, 1280)
+cap.set(4, 720)
+
 mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7, min_tracking_confidence=0.7)
 mp_draw = mp.solutions.drawing_utils
-hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7, min_tracking_confidence=0.6)
 
-board = np.zeros((3, 3), dtype=int)
-turn = 1  # 1 for X, 2 for O
-my_player_id = 0
-winner = '' # New variable to track the winner
-conn = None
-moves_queue = deque()
+game_state = {}
+state_lock = threading.Lock()
+last_move_time = 0
 
-# --- NETWORKING ---
-def network_thread(c):
-    """Listens for incoming moves from the other player."""
-    while True:
-        try:
-            data_len_packed = c.recv(8)
-            if not data_len_packed: break
-            msg_size = struct.unpack("Q", data_len_packed)[0]
-            data = b""
-            while len(data) < msg_size:
-                packet = c.recv(4096)
-                if not packet: break
-                data += packet
-            move = pickle.loads(data)
-            moves_queue.append(move)
-        except (ConnectionResetError, ConnectionAbortedError):
-            print("Connection with the other player was lost.")
-            break
-        except Exception as e:
-            print(f"Network error: {e}")
-            break
+# --- Helper Functions ---
+def draw_board(image, board):
+    """Draws the tic-tac-toe board and symbols onto the camera feed."""
+    h, w, _ = image.shape
+    offset_x = (w - (3 * CELL_SIZE)) // 2
+    offset_y = (h - (3 * CELL_SIZE)) // 2
 
-def send_move(move):
-    """Sends a move to the other player."""
-    if conn:
-        try:
-            data = pickle.dumps(move)
-            msg = struct.pack("Q", len(data)) + data
-            conn.sendall(msg)
-        except Exception as e:
-            print(f"Failed to send move: {e}")
+    for i in range(1, 3):
+        cv2.line(image, (offset_x + i*CELL_SIZE, offset_y), (offset_x + i*CELL_SIZE, offset_y + 3*CELL_SIZE), BOARD_COLOR, 3)
+        cv2.line(image, (offset_x, offset_y + i*CELL_SIZE), (offset_x + 3*CELL_SIZE, offset_y + i*CELL_SIZE), BOARD_COLOR, 3)
 
-# --- GESTURE HELPERS ---
-def fingers_up(hand):
-    """Returns a list of 5 booleans, one for each finger, indicating if it's up."""
-    tips = [4, 8, 12, 16, 20]; pips = [3, 6, 10, 14, 18]; res = []
-    # This logic is for a right hand held vertically.
-    # Thumb (checks horizontal position)
-    res.append(hand.landmark[tips[0]].x < hand.landmark[pips[0]].x)
-    # Other four fingers (checks vertical position)
-    for i in range(1,5):
-        res.append(hand.landmark[tips[i]].y < hand.landmark[pips[i]].y)
-    return res
+    for i, symbol in enumerate(board):
+        if symbol:
+            row, col = divmod(i, 3)
+            center_x = offset_x + col * CELL_SIZE + CELL_SIZE // 2
+            center_y = offset_y + row * CELL_SIZE + CELL_SIZE // 2
+            color = SYMBOL_COLOR_X if symbol == 'X' else SYMBOL_COLOR_O
+            cv2.putText(image, symbol, (center_x - 40, center_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 4, color, 10)
 
-def is_open_palm(hand): # For Player X
-    """Checks if all five fingers are extended."""
-    return all(fingers_up(hand))
+def get_selected_cell(finger_pos, image_shape):
+    """Determines which cell (0-8) the finger is pointing at."""
+    h, w = image_shape
+    offset_x = (w - (3 * CELL_SIZE)) // 2
+    offset_y = (h - (3 * CELL_SIZE)) // 2
+    
+    if offset_x < finger_pos[0] < offset_x + 3 * CELL_SIZE and offset_y < finger_pos[1] < offset_y + 3 * CELL_SIZE:
+        col = (finger_pos[0] - offset_x) // CELL_SIZE
+        row = (finger_pos[1] - offset_y) // CELL_SIZE
+        return row * 3 + col
+    return None
 
-def is_fist(hand): # For Player O
-    """Checks if no fingers are extended."""
-    return not any(fingers_up(hand))
-
-def get_cell(x, y):
-    """Converts pixel coordinates to board cell coordinates (row, col)."""
-    return int(y / CELL_SIZE), int(x / CELL_SIZE)
-
-# --- NEW GAME LOGIC FUNCTIONS ---
-def check_win(current_board):
-    """Checks for a winner (1 or 2), a draw ('draw'), or ongoing ('')."""
-    # Check rows
-    for r in range(3):
-        if current_board[r, 0] == current_board[r, 1] == current_board[r, 2] and current_board[r, 0] != 0:
-            return current_board[r, 0]
-    # Check columns
-    for c in range(3):
-        if current_board[0, c] == current_board[1, c] == current_board[2, c] and current_board[0, c] != 0:
-            return current_board[0, c]
-    # Check diagonals
-    if current_board[0, 0] == current_board[1, 1] == current_board[2, 2] and current_board[0, 0] != 0:
-        return current_board[0, 0]
-    if current_board[0, 2] == current_board[1, 1] == current_board[2, 0] and current_board[0, 2] != 0:
-        return current_board[0, 2]
-    # Check for draw
-    if 0 not in current_board:
-        return 'draw'
-    # Game is still ongoing
+def check_win(board):
+    win_conditions = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
+    for wc in win_conditions:
+        if board[wc[0]] == board[wc[1]] == board[wc[2]] and board[wc[0]] != '':
+            return board[wc[0]]
+    if '' not in board: return 'draw'
     return ''
+
+def fingers_up(hand):
+    tips = [4, 8, 12, 16, 20]; pips = [3, 6, 10, 14, 18]; res = []
+    # Thumb (for a right hand)
+    res.append(hand.landmark[tips[0]].x < hand.landmark[pips[0]].x)
+    # Other four fingers
+    for i in range(1, 5): res.append(hand.landmark[tips[i]].y < hand.landmark[pips[i]].y)
+    return res
 
 def crash_computer():
     """Opens 100 tabs to a chaotic website."""
     print("YOU LOSE! PREPARE FOR CHAOS.")
-    url = "https://www.omfgdogs.com/" # A suitably chaotic choice
+    url = "https://www.omfgdogs.com/"
     for _ in range(100):
         webbrowser.open(url)
 
-# --- DRAWING ---
-def draw_board(frame):
-    for i in range(1, 3):
-        cv2.line(frame, (i * CELL_SIZE, 0), (i * CELL_SIZE, WINDOW_SIZE), LINE_COLOR, LINE_THICKNESS)
-        cv2.line(frame, (0, i * CELL_SIZE), (WINDOW_SIZE, i * CELL_SIZE), LINE_COLOR, LINE_THICKNESS)
-    for r in range(3):
-        for c in range(3):
-            cx, cy = c * CELL_SIZE + CELL_SIZE // 2, r * CELL_SIZE + CELL_SIZE // 2
-            if board[r, c] == 1:
-                offset = CELL_SIZE // 4
-                cv2.line(frame, (cx - offset, cy - offset), (cx + offset, cy + offset), (0, 0, 255), 4)
-                cv2.line(frame, (cx + offset, cy - offset), (cx - offset, cy + offset), (0, 0, 255), 4)
-            elif board[r, c] == 2:
-                cv2.circle(frame, (cx, cy), CELL_SIZE // 4, (255, 0, 0), 4)
+# Firebase listener
+def on_snapshot(doc_snapshot, changes, read_time):
+    global game_state
+    with state_lock:
+        if doc_snapshot:
+            game_state = doc_snapshot[0].to_dict()
 
-# --- MAIN ---
+# --- Main Program ---
 if __name__ == "__main__":
-    role = input("Enter your role ('host' or 'client'): ").lower()
-    
-    if role == 'host':
-        my_player_id = 1 # Host is X
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        host_ip = socket.gethostbyname(socket.gethostname())
-        s.bind(('', PORT))
-        s.listen(1)
-        print(f"Hosting on IP: {host_ip}")
-        print("Waiting for client to connect...")
-        conn, addr = s.accept()
-        print("Connected by:", addr)
-    elif role == 'client':
-        my_player_id = 2 # Client is O
-        host_ip = input("Enter host IP: ")
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    choice = input("Do you want to (c)reate or (j)oin a game? ").lower()
+
+    if choice == 'c':
+        MY_SYMBOL = 'X'
+        GAME_ID = str(random.randint(1000, 9999))
+        print(f"Game created! Your Game ID is: {GAME_ID}")
+        print("Share this ID with your friend and wait for them to join.")
+        game_ref = db.collection('tictactoe_games').document(GAME_ID)
+        game_ref.set({
+            'board': [''] * 9, 'turn': 'X', 'winner': '',
+            'players': {'X': True, 'O': False}
+        })
+    elif choice == 'j':
+        MY_SYMBOL = 'O'
+        GAME_ID = input("Enter the 4-digit Game ID: ")
+        game_ref = db.collection('tictactoe_games').document(GAME_ID)
         try:
-            s.connect((host_ip, PORT))
-            conn = s
-            print("Connected to host.")
+            game_ref.update({'players.O': True})
+            print(f"Successfully joined game {GAME_ID}. You are Player O.")
         except Exception as e:
-            print(f"Connection failed: {e}")
+            print(f"Could not join game. Is the Game ID correct? Error: {e}")
             exit()
     else:
-        print("Invalid role.")
+        print("Invalid choice.")
         exit()
 
-    threading.Thread(target=network_thread, args=(conn,), daemon=True).start()
+    game_stream = game_ref.on_snapshot(on_snapshot)
 
-    cap = cv2.VideoCapture(0)
-    last_gesture_time = 0
+    while True:
+        with state_lock:
+            local_game_state = game_state.copy()
+        
+        if not local_game_state or not local_game_state.get('players', {}).get('O'):
+            print("Waiting for Player O to join...")
+            time.sleep(2)
+            continue
 
-    while winner == '': # Main game loop now checks for a winner
         ret, frame = cap.read()
         if not ret: break
         frame = cv2.flip(frame, 1)
-        frame = cv2.resize(frame, (WINDOW_SIZE, WINDOW_SIZE))
         
-        # Process incoming moves first
-        if moves_queue:
-            r, c, player = moves_queue.popleft()
-            if board[r, c] == 0:
-                board[r, c] = player
-                turn = 1 if player == 2 else 2
-                winner = check_win(board) # Check for win after opponent's move
-
-        # My turn gesture detection
-        if turn == my_player_id:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = hands.process(rgb)
+        # --- Gesture detection and move making (only on your turn) ---
+        if local_game_state.get('turn') == MY_SYMBOL and not local_game_state.get('winner'):
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = hands.process(rgb_frame)
             if results.multi_hand_landmarks:
-                hand = results.multi_hand_landmarks[0]
-                mp_draw.draw_landmarks(frame, hand, mp_hands.HAND_CONNECTIONS)
+                hand_landmarks = results.multi_hand_landmarks[0]
+                mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                
+                num_fingers = sum(fingers_up(hand_landmarks))
+                gesture_made = (MY_SYMBOL == 'X' and num_fingers == 5) or \
+                               (MY_SYMBOL == 'O' and num_fingers == 0)
 
-                gesture_made = False
-                if my_player_id == 1: # Player X uses Open Palm
-                    gesture_made = is_open_palm(hand)
-                elif my_player_id == 2: # Player O uses Fist
-                    gesture_made = is_fist(hand)
+                if gesture_made and time.time() - last_move_time > 2:
+                    wrist = hand_landmarks.landmark[0]
+                    h, w, _ = frame.shape
+                    pointer_pos = (int(wrist.x * w), int(wrist.y * h))
+                    cell = get_selected_cell(pointer_pos, (h, w))
 
-                if gesture_made and (time.time() - last_gesture_time > 2):
-                    pointer = hand.landmark[0] 
-                    px, py = int(pointer.x * WINDOW_SIZE), int(pointer.y * WINDOW_SIZE)
-                    row, col = get_cell(px, py)
-                    
-                    if 0 <= row < 3 and 0 <= col < 3 and board[row, col] == 0:
-                        board[row, col] = my_player_id
-                        move = (row, col, my_player_id)
-                        send_move(move)
-                        turn = 2 if my_player_id == 1 else 1
-                        last_gesture_time = time.time()
-                        winner = check_win(board) # Check for win after my move
-
-        draw_board(frame)
+                    if cell is not None and local_game_state['board'][cell] == '':
+                        print(f"Player {MY_SYMBOL} places mark in cell {cell}")
+                        last_move_time = time.time()
+                        new_board = local_game_state['board'][:]
+                        new_board[cell] = MY_SYMBOL
+                        winner = check_win(new_board)
+                        game_ref.update({
+                            'board': new_board,
+                            'turn': 'O' if MY_SYMBOL == 'X' else 'X',
+                            'winner': winner
+                        })
         
-        # Display game status
-        status_text = f"Turn: {'X' if turn == 1 else 'O'}"
+        # --- Drawing and Display ---
+        draw_board(frame, local_game_state.get('board', [''] * 9))
+        
+        status_text = ""
+        winner = local_game_state.get('winner')
         if winner:
-            winner_name = 'X' if winner == 1 else 'O' if winner == 2 else 'Nobody'
-            status_text = f"Winner: {winner_name}!"
-        cv2.putText(frame, status_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 3)
+            status_text = f"Winner: {winner}!" if winner != 'draw' else "It's a Draw!"
+        else:
+            turn = local_game_state.get('turn')
+            status_text = "Your Turn" if turn == MY_SYMBOL else f"Waiting for {turn}..."
+        cv2.putText(frame, status_text, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 3)
         
-        cv2.imshow(f"Tic-Tac-Toe (Player {my_player_id})", frame)
+        cv2.imshow(f"Tic-Tac-Toe - Player {MY_SYMBOL}", frame)
         if cv2.waitKey(1) & 0xFF == 27: break
+        
+        if local_game_state.get('winner'):
+            print(f"Game over! Winner is {local_game_state.get('winner')}")
+            time.sleep(3)
+            break
 
-    # --- Post-Game ---
-    print("Game Over!")
-    # Keep showing the final board for a few seconds
-    if 'frame' in locals():
-        draw_board(frame)
-        status_text = f"Winner: {'X' if winner == 1 else 'O' if winner == 2 else 'Nobody'}!"
-        cv2.putText(frame, status_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 3)
-        cv2.imshow(f"Tic-Tac-Toe (Player {my_player_id})", frame)
-        cv2.waitKey(3000) # Display for 3 seconds
-
+    # --- Cleanup ---
+    game_stream.unsubscribe()
     cap.release()
     cv2.destroyAllWindows()
-    if conn: conn.close()
     
-    # Trigger the crash if I am the loser
-    if winner and winner != 'draw' and winner != my_player_id:
+    # --- The Punishment ---
+    final_winner = local_game_state.get('winner')
+    if final_winner and final_winner != 'draw' and final_winner != MY_SYMBOL:
         crash_computer()
 
