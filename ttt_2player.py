@@ -114,7 +114,7 @@ def check_win(current_board):
 
 def crash_computer():
     """Opens 100 tabs to a chaotic website."""
-    print("PLAYER X WINS! PREPARE FOR CHAOS.")
+    print("YOU LOSE! PREPARE FOR CHAOS.")
     url = "https://www.omfgdogs.com/" # A suitably chaotic choice
     for _ in range(100):
         webbrowser.open(url)
@@ -235,7 +235,7 @@ if __name__ == "__main__":
     cv2.destroyAllWindows()
     if conn: conn.close()
     
-    # Trigger the crash if Player X won
-    if winner == 1:
+    # Trigger the crash if I am the loser
+    if winner and winner != 'draw' and winner != my_player_id:
         crash_computer()
 
