@@ -31,10 +31,10 @@ Firebase Firestore: Acts as the central server for real-time database syncing an
 Follow these steps to get the game running. Both players need to set up their environment.
 
 Step 1: Prerequisites
-Make sure you have Python 3.8 - 3.11 installed on your system.
+Make sure you have Python 3.8 - 3.11 installed on your system. Anything older/newer than this will NOT work.
 
 Step 2: Get the Code
-Clone or download the project files to a folder on your computer. You will need the tic_tac_toe_firebase.py and requirements.txt files.
+Clone or download the project files to a folder on your computer. You will need the ttt_2player.py and requirements.txt files.
 
 Step 3: Set up a Virtual Environment
 It is crucial to use a virtual environment to avoid conflicts with other Python projects.
