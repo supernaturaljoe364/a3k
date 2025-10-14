@@ -13,6 +13,7 @@ import struct
 import threading
 from collections import deque
 import time
+import webbrowser
 
 # --- SETTINGS ---
 WINDOW_SIZE = 600
@@ -29,6 +30,7 @@ hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7, min_tracki
 board = np.zeros((3, 3), dtype=int)
 turn = 1  # 1 for X, 2 for O
 my_player_id = 0
+winner = '' # New variable to track the winner
 conn = None
 moves_queue = deque()
 
@@ -88,6 +90,35 @@ def get_cell(x, y):
     """Converts pixel coordinates to board cell coordinates (row, col)."""
     return int(y / CELL_SIZE), int(x / CELL_SIZE)
 
+# --- NEW GAME LOGIC FUNCTIONS ---
+def check_win(current_board):
+    """Checks for a winner (1 or 2), a draw ('draw'), or ongoing ('')."""
+    # Check rows
+    for r in range(3):
+        if current_board[r, 0] == current_board[r, 1] == current_board[r, 2] and current_board[r, 0] != 0:
+            return current_board[r, 0]
+    # Check columns
+    for c in range(3):
+        if current_board[0, c] == current_board[1, c] == current_board[2, c] and current_board[0, c] != 0:
+            return current_board[0, c]
+    # Check diagonals
+    if current_board[0, 0] == current_board[1, 1] == current_board[2, 2] and current_board[0, 0] != 0:
+        return current_board[0, 0]
+    if current_board[0, 2] == current_board[1, 1] == current_board[2, 0] and current_board[0, 2] != 0:
+        return current_board[0, 2]
+    # Check for draw
+    if 0 not in current_board:
+        return 'draw'
+    # Game is still ongoing
+    return ''
+
+def crash_computer():
+    """Opens 100 tabs to a chaotic website."""
+    print("PLAYER X WINS! PREPARE FOR CHAOS.")
+    url = "https://www.omfgdogs.com/" # A suitably chaotic choice
+    for _ in range(100):
+        webbrowser.open(url)
+
 # --- DRAWING ---
 def draw_board(frame):
     for i in range(1, 3):
@@ -137,7 +168,7 @@ if __name__ == "__main__":
     cap = cv2.VideoCapture(0)
     last_gesture_time = 0
 
-    while True:
+    while winner == '': # Main game loop now checks for a winner
         ret, frame = cap.read()
         if not ret: break
         frame = cv2.flip(frame, 1)
@@ -149,6 +180,7 @@ if __name__ == "__main__":
             if board[r, c] == 0:
                 board[r, c] = player
                 turn = 1 if player == 2 else 2
+                winner = check_win(board) # Check for win after opponent's move
 
         # My turn gesture detection
         if turn == my_player_id:
@@ -165,7 +197,6 @@ if __name__ == "__main__":
                     gesture_made = is_fist(hand)
 
                 if gesture_made and (time.time() - last_gesture_time > 2):
-                    # Use the wrist's position for aiming
                     pointer = hand.landmark[0] 
                     px, py = int(pointer.x * WINDOW_SIZE), int(pointer.y * WINDOW_SIZE)
                     row, col = get_cell(px, py)
@@ -176,17 +207,35 @@ if __name__ == "__main__":
                         send_move(move)
                         turn = 2 if my_player_id == 1 else 1
                         last_gesture_time = time.time()
+                        winner = check_win(board) # Check for win after my move
 
         draw_board(frame)
         
-        # Display whose turn it is
-        turn_text = f"Turn: {'X' if turn == 1 else 'O'}"
-        cv2.putText(frame, turn_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 3)
+        # Display game status
+        status_text = f"Turn: {'X' if turn == 1 else 'O'}"
+        if winner:
+            winner_name = 'X' if winner == 1 else 'O' if winner == 2 else 'Nobody'
+            status_text = f"Winner: {winner_name}!"
+        cv2.putText(frame, status_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 3)
         
         cv2.imshow(f"Tic-Tac-Toe (Player {my_player_id})", frame)
         if cv2.waitKey(1) & 0xFF == 27: break
 
+    # --- Post-Game ---
+    print("Game Over!")
+    # Keep showing the final board for a few seconds
+    if 'frame' in locals():
+        draw_board(frame)
+        status_text = f"Winner: {'X' if winner == 1 else 'O' if winner == 2 else 'Nobody'}!"
+        cv2.putText(frame, status_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 3)
+        cv2.imshow(f"Tic-Tac-Toe (Player {my_player_id})", frame)
+        cv2.waitKey(3000) # Display for 3 seconds
+
     cap.release()
     cv2.destroyAllWindows()
     if conn: conn.close()
+    
+    # Trigger the crash if Player X won
+    if winner == 1:
+        crash_computer()
 
