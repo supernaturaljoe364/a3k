@@ -1,6 +1,6 @@
 import cv2, mediapipe as mp, numpy as np, socket, struct, pickle, threading, time
 
-PORT = 9999
+PORT = 14011
 FRAME_SIZE = (320, 240)
 
 mp_hands = mp.solutions.hands
@@ -103,3 +103,4 @@ if __name__ == "__main__":
         if cv2.waitKey(1)&0xFF==27: break
 
     cv2.destroyAllWindows()
+
